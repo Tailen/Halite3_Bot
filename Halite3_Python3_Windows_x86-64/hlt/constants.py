@@ -65,6 +65,9 @@ def load_constants(constants):
     """An inspired ship instead spends 1/X% halite to move."""
     INSPIRED_MOVE_COST_RATIO = constants['INSPIRED_MOVE_COST_RATIO']
 
+    # """Search and plan the best move within this Manhattan distance"""
+    # MAX_SEARCH_RADIUS = 5
+
 
 # TODO remove once width/height are sent by server (#78)
 def set_dimensions(width, height):

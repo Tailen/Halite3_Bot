@@ -1,4 +1,6 @@
 import queue
+import random
+import logging
 
 from . import constants
 from .entity import Entity, Shipyard, Ship, Dropoff
@@ -46,10 +48,16 @@ class MapCell:
     def mark_unsafe(self, ship):
         """
         Mark this cell as unsafe (occupied) for navigation.
-
         Use in conjunction with GameMap.naive_navigate.
         """
         self.ship = ship
+
+    def mark_safe(self):
+        """
+        Mark this cell as safe (freed) for navigation.
+        Use in conjunction with GameMap.naive_navigate.
+        """
+        self.ship = None
 
     def __eq__(self, other):
         return self.position == other.position
@@ -123,7 +131,23 @@ class GameMap:
         return (Direction.South if target.y > source.y else Direction.North if target.y < source.y else None,
                 Direction.East if target.x > source.x else Direction.West if target.x < source.x else None)
 
-    def get_unsafe_moves(self, source, destination):
+    def get_empty_direction(self, source):
+        """
+        Return the Direction(s) that are not occupied by ships
+        """
+        empty_directions = []
+        source = self.normalize(source)
+        if not self[source.directional_offset(Direction.North)].is_occupied:
+            empty_directions.append(Direction.North)
+        if not self[source.directional_offset(Direction.South)].is_occupied:
+            empty_directions.append(Direction.South)
+        if not self[source.directional_offset(Direction.East)].is_occupied:
+            empty_directions.append(Direction.East)
+        if not self[source.directional_offset(Direction.West)].is_occupied:
+            empty_directions.append(Direction.West)
+        return empty_directions
+
+    def get_safe_moves(self, source, destination):
         """
         Return the Direction(s) to move closer to the target point, or empty if the points are the same.
         This move mechanic does not account for collisions. The multiple directions are if both directional movements
@@ -137,32 +161,81 @@ class GameMap:
         possible_moves = []
         distance = abs(destination - source)
         y_cardinality, x_cardinality = self._get_target_direction(source, destination)
+        empty_directions = self.get_empty_direction(source)
 
+        # Return random direction if distance left or right / up or down is the same
         if distance.x != 0:
-            possible_moves.append(x_cardinality if distance.x < (self.width / 2)
-                                  else Direction.invert(x_cardinality))
+            unsafe_move_x = (x_cardinality if distance.x < (self.width / 2)
+                            else Direction.invert(x_cardinality) if distance.x > (self.width / 2)
+                            else random.choice([Direction.East, Direction.West]))
+            if unsafe_move_x in empty_directions:
+                possible_moves.append(unsafe_move_x)
         if distance.y != 0:
-            possible_moves.append(y_cardinality if distance.y < (self.height / 2)
-                                  else Direction.invert(y_cardinality))
+            unsafe_move_y = (y_cardinality if distance.y < (self.height / 2)
+                            else Direction.invert(y_cardinality) if distance.y > (self.height / 2)
+                            else random.choice([Direction.South, Direction.North]))
+            if unsafe_move_y in empty_directions:
+                possible_moves.append(unsafe_move_y)
         return possible_moves
 
-    def naive_navigate(self, ship, destination):
+    def navigate(self, ship, destination):
         """
         Returns a singular safe move towards the destination.
-
         :param ship: The ship to move.
         :param destination: Ending position
         :return: A direction.
         """
-        # No need to normalize destination, since get_unsafe_moves
-        # does that
-        for direction in self.get_unsafe_moves(ship.position, destination):
+        possible_directions = []
+        # No need to normalize destination, since get_safe_moves does that
+        for direction in self.get_safe_moves(ship.position, destination):
+            possible_directions.append(direction)
+        # No choice then stay still
+        if not len(possible_directions):
+            logging.info('Staying still')
+            self.log_gamemap()
+            return Direction.Still
+        else:
+            # Choose a target direction randomly
+            direction = random.choice(possible_directions)
             target_pos = ship.position.directional_offset(direction)
+            # Mark cell to be unsafe and free up safe cell
             if not self[target_pos].is_occupied:
                 self[target_pos].mark_unsafe(ship)
+                self[ship.position].mark_safe()
+                logging.info('Moving towards direction {}'.format(direction))
+                self.log_gamemap()
                 return direction
 
-        return Direction.Still
+    def uncollidable_radius(self, ship1, ship2):
+        """
+        Return the largest radius such that no other ship can reach in next radius turns
+        Formula: round_up(distance / 2.0) - 1
+        """
+        distance = self.calculate_distance(ship1.position, ship2.position)
+        return round(distance / 2.0) - 1
+
+    def log_gamemap(self):
+        """
+        Log a 2D list of the game map with occupied cells marked using logging.info
+        """
+        gamemap = []
+        # Create the 2D list map
+        for y in range(self.height):
+            gamemap.append([])
+            for x in range(self.width):
+                if self[Position(x, y)].ship is not None:
+                    gamemap[y].append(str(self[Position(x, y)].ship.owner))
+                elif self[Position(x, y)].structure is not None:
+                    gamemap[y].append('o')
+                else:
+                    gamemap[y].append('_')
+        # Turn the 2D list into a string
+        mapstr = ''
+        for row in gamemap:
+            mapstr += '\n'
+            for cell in row:
+                mapstr = mapstr + cell + ' '
+        logging.info(mapstr)
 
     @staticmethod
     def _generate():
@@ -185,8 +258,7 @@ class GameMap:
         Updates this map object from the input given by the game engine
         :return: nothing
         """
-        # Mark cells as safe for navigation (will re-mark unsafe cells
-        # later)
+        # Mark cells as safe for navigation (will re-mark unsafe cells later)
         for y in range(self.height):
             for x in range(self.width):
                 self[Position(x, y)].ship = None
